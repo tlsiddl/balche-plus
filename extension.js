@@ -1393,13 +1393,19 @@ function buildSection(msgEl) {
     h("span", { class: "mxn" }, name)));
   // 번역문이 있으면 번역문만 (외국어로 출력하고 번역해 둔 경우)
   const tr = [...msgEl.querySelectorAll(".translation-text")].find((e) => e.textContent.trim());
+  // 문단 번역 확장(ptx): 원래 본문은 숨기고 바로 뒤에 번역된 사본(.ptx-view)을 그린다.
+  // 사본에서 원문 칸(.ptx-o)과 버튼 줄을 빼고 번역문(.ptx-t)만 읽는다.
+  const ptx = tr ? [] : [...msgEl.querySelectorAll(".ptx-view:not(.ptx-pill-only)")]
+    .filter((v) => v.closest("[data-message-id]") === msgEl && v.querySelector(".ptx-t"))
+    .map((v) => { const c = v.cloneNode(true); c.querySelectorAll(".ptx-o, .ptx-bar, .ptx-pill").forEach((x) => x.remove()); return c; });
   // 단체 대화방은 본문 칸 이름이 달라서 말풍선·글 칸을 대신 읽는다
   const blocks = [...msgEl.querySelectorAll(".mari-message-bubble, .mari-chat-style-text")].filter((e) => !e.parentElement.closest(".mari-message-bubble, .mari-chat-style-text"));
-  const content = tr || msgEl.querySelector(".mari-message-content");
-  const paras = content ? toParas(content) : blocks.flatMap((b) => toParas(b));
+  const content = tr || [...msgEl.querySelectorAll(".mari-message-content")].find((e) => !e.hasAttribute("data-ptx-hidden") && !e.closest(".ptx-view"))
+    || msgEl.querySelector(".mari-message-content");
+  const paras = ptx.length ? ptx.flatMap((v) => toParas(v)) : content ? toParas(content) : blocks.flatMap((b) => toParas(b));
   if (!paras.length) paras.push(h("p", null, ""));
   sec.append(h("div", { class: "mx-body", contenteditable: "true", spellcheck: "false", "aria-label": "발췌 본문" }, ...paras));
-  if (tr) sec.dataset.tr = "dom";
+  if (tr || ptx.length) sec.dataset.tr = "dom";
   markDialogue(sec);
   return sec;
 }
