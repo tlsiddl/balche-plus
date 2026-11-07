@@ -646,3 +646,60 @@
 .mx-card.tpl-ed .mxa { width: 1.45em; height: 1.45em; }
 /* 에디토리얼: 제목도 이름도 없으면 본문이 위 두 줄에 붙지 않게, 아래쪽과 비슷한 간격을 준다 */
 .mx-card.tpl-ed.noname .mx-title[hidden] + .mx-doc { padding-top: 1.1em; }
+
+/* ───────── balche-plus: iOS·터치 화면 ───────── */
+.mxc-root { -webkit-tap-highlight-color: transparent; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+.mxc-scroll, .mxc-sidebody, .mxc-reslist, .mxc-toolrow, .mxc-topbtns, .mxc-tabs { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+/* 키보드가 올라오면 창을 보이는 영역 높이에 맞춘다 (JS가 --mxc-vh 를 넣어 줌) */
+.mxc-root.mxc-vv { bottom: auto; height: var(--mxc-vh, 100dvh); top: var(--mxc-vtop, 0px); }
+
+@media (max-width: 820px), (orientation: portrait) and (max-width: 1100px) {
+  .mxc-win { height: var(--mxc-vh, 100dvh); }
+  /* 노치·다이내믹 아일랜드·홈 바에 버튼이 가리지 않게 */
+  .mxc-top { padding-top: max(4px, env(safe-area-inset-top)); padding-left: max(10px, env(safe-area-inset-left)); padding-right: max(6px, env(safe-area-inset-right)); }
+  .mxc-tools { padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+  .mxc-side { padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+  /* 탭은 한 줄로, 넘치면 옆으로 밀어서 */
+  .mxc-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .mxc-tabs::-webkit-scrollbar { display: none; }
+  .mxc-tabs button { flex: none; }
+  /* 키보드가 떠 있고 본문을 고치는 중이면 아래 설정 칸을 접어서 본문을 넓게 */
+  .mxc-kb .mxc-body:has(.mxc-pane :focus) .mxc-side { display: none; }
+  .mxc-kb .mxc-body:has(.mxc-side :focus) .mxc-pane { flex: 0 0 30%; }
+  .mxc-kb .mxc-body:has(.mxc-side :focus) .mxc-side { flex: 1 1 0; }
+}
+
+/* 손가락으로 쓰는 기기 */
+@media (pointer: coarse) {
+  /* iOS 사파리는 16px보다 작은 입력칸을 누르면 화면을 확대해 버린다 */
+  .mxc-root input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]),
+  .mxc-root select, .mxc-root textarea { font-size: 16px !important; }
+  .mxc-more .mxc-sel, .mxc-more .mxc-num { height: 36px; min-height: 36px; }
+  /* 누르기 쉬운 크기 (44px 언저리) */
+  .mxc-top .mxc-btn, .mxc-btn { min-height: 36px; padding: 7px 12px; }
+  .mxc-icobtn { width: 40px; height: 38px; }
+  .mxc-close { width: 40px !important; height: 40px !important; }
+  .mxc-tabs button { padding: 10px 10px 11px; }
+  .mxc-tool { min-width: 52px; min-height: 44px; }
+  .mxc-sw { width: 28px; height: 28px; }
+  .mxc-x { width: 32px; height: 32px; }
+  .mxc-txtplwrap .mxc-x { width: 22px !important; height: 22px !important; top: -9px; right: -9px; font-size: 13px; }
+  .mxc-pagecheck input, .mxc-allsel input[type="checkbox"], .mxc-decooff input { width: 22px; height: 22px; }
+  .mxc-fold { padding: 8px 0; }
+  .mxc-more > summary { padding: 8px 0 10px; }
+  /* 스티커 손잡이도 잡기 쉽게 */
+  .mx-stk-rs { width: 20px; height: 20px; right: -10px; bottom: -10px; }
+  .mx-stk-rt { width: 20px; height: 20px; margin-left: -10px; top: -30px; }
+  /* 손가락으로는 hover가 눌린 채 남아서 테두리 강조를 끈다 */
+  .mxc-btn:hover { border-color: var(--mxc-line); }
+}
+
+/* iOS 저장: 공유 시트로 사진 앱에 저장 */
+.mxc-share { position: fixed; inset: 0; z-index: 2147483002; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, 0.45); }
+.mxc-sharecard {
+  width: min(480px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 18px 16px calc(16px + env(safe-area-inset-bottom));
+  background: var(--background, #1b1b23); color: var(--foreground, #e9e9ee); border-top: 1px solid var(--border, rgba(255,255,255,.12));
+  border-radius: 16px 16px 0 0; font-size: 15px; line-height: 1.45;
+}
+.mxc-sharecard p { margin: 0; color: var(--muted-foreground, #9a9aa6); font-size: 13px; }
+.mxc-sharecard .mxc-btn { min-height: 46px; font-size: 16px; }

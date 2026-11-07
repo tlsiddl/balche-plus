@@ -1399,8 +1399,91 @@ function buildSection(msgEl) {
   const paras = content ? toParas(content) : blocks.flatMap((b) => toParas(b));
   if (!paras.length) paras.push(h("p", null, ""));
   sec.append(h("div", { class: "mx-body", contenteditable: "true", spellcheck: "false", "aria-label": "발췌 본문" }, ...paras));
+  if (tr) sec.dataset.tr = "dom";
   markDialogue(sec);
   return sec;
+}
+
+// ───────────────────────── 저장된 번역문 ─────────────────────────
+// 마리나라는 번역문을 메시지 extra.translation 에 저장해 둔다.
+// '번역만 보기'처럼 화면에 번역문 칸이 따로 없을 때도 이걸 읽어 번역문으로 발췌한다.
+function chatIdNow() {
+  return document.querySelector("[data-chat-composer][data-chat-id]")?.getAttribute("data-chat-id")
+    || document.querySelector("textarea[data-chat-id]")?.getAttribute("data-chat-id") || "";
+}
+function apiHeaders() {
+  const headers = {};
+  try { const sec = localStorage.getItem("marinara_admin_secret")?.trim(); if (sec) headers["X-Admin-Secret"] = sec; } catch {}
+  return headers;
+}
+async function fetchMessages(ids) {
+  const found = new Map();
+  const chatId = chatIdNow();
+  if (!chatId || !ids.length) return found;
+  const headers = apiHeaders();
+  const want = new Set(ids);
+  let before = "";
+  for (let i = 0; i < 12 && want.size; i++) {
+    const url = `/api/chats/${encodeURIComponent(chatId)}/messages?limit=60` + (before ? `&before=${encodeURIComponent(before)}` : "");
+    const r = await marinara.fetch(url, { headers });
+    if (!r.ok) break;
+    const rows = await r.json();
+    if (!Array.isArray(rows) || !rows.length) break;
+    for (const m of rows) if (want.delete(m.id)) found.set(m.id, m);
+    if (rows.length < 60) break;
+    const oldest = rows.reduce((a, b) => (String(a.createdAt) <= String(b.createdAt) ? a : b));
+    before = `${oldest.createdAt}|${encodeURIComponent(oldest.id)}`;
+  }
+  return found;
+}
+function storedTranslation(row) {
+  let ex = row?.extra;
+  if (typeof ex === "string") { try { ex = JSON.parse(ex); } catch { ex = null; } }
+  const t = typeof ex?.translation === "string" ? ex.translation.trim() : "";
+  if (!t || ex.translationHidden) return "";
+  // 원문을 다시 뽑았거나 고친 뒤라면 예전 번역이라 쓰지 않는다
+  if (typeof ex.translationSource === "string" && ex.translationSource !== row.content) return "";
+  return t;
+}
+// 번역문은 마크다운 글이라 **굵게**, *기울임* 만 살려서 문단으로 바꾼다
+function textToParas(text) {
+  const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const div = document.createElement("div");
+  div.innerHTML = esc
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+  return toParas(div);
+}
+async function useStoredTranslations(secs) {
+  const owner = UI;
+  const want = secs.filter((s) => s.dataset.tr !== "dom");
+  if (!owner || !want.length) return;
+  const before = new Map(want.map((s) => [s, s.querySelector(".mx-body")?.textContent]));
+  const rows = await fetchMessages(want.map((s) => s.dataset.mid));
+  if (UI !== owner) return;
+  syncPageEdits();
+  let changed = 0;
+  for (const s of want) {
+    const body = s.querySelector(".mx-body");
+    // 불러오는 사이에 손댄 본문은 건드리지 않는다
+    if (!s.isConnected || !body || body.textContent !== before.get(s)) continue;
+    const t = storedTranslation(rows.get(s.dataset.mid));
+    if (!t) continue;
+    const paras = textToParas(t);
+    if (!paras.length) continue;
+    body.replaceChildren(...paras);
+    markDialogue(body);
+    s.dataset.tr = "saved";
+    owner.originals.set(s.dataset.mid, s.innerHTML);
+    if (S.autoRules) replaceIn(s, S.rules, S.josa);
+    changed++;
+  }
+  if (!changed) return;
+  normalizeBlankLines(owner.doc);
+  markEmpty();
+  owner.pagesDirty = true;
+  refreshPages();
+  if (owner.tab === "msgs" || owner.tab === "layout") renderTab();
 }
 
 // ───────────────────────── 이름 바꾸기 ─────────────────────────
@@ -1452,6 +1535,7 @@ function closeEditor(force) {
   const closed = UI;
   UI = null;
   document.removeEventListener("selectionchange", closed.onSel);
+  closed.offVV?.();
   closed.ro?.disconnect();
   closed.docObserver?.disconnect();
   closed.pageObserver?.disconnect();
@@ -2662,6 +2746,7 @@ function addAdjacent(dir) {
   markEmpty();
   renderTab();
   if (!UI.model) refreshModel();
+  useStoredTranslations([sec]).catch((e) => marinara.log.warn("번역문 불러오기 실패", e));
 }
 
 // ───────────────────────── 이미지 만들기 ─────────────────────────
@@ -2903,6 +2988,7 @@ async function makeImages() {
     // Freeze exactly the pages shown in the preview before the first asynchronous export.
     const snapshots = selected.map(item => ({ index: item.index, page: prepClone(item.page) }));
     for (const item of snapshots) { item.page.style.transform = ""; host.append(item.page); }
+    const shareFiles = isIOS() ? [] : null;
     for (let i = 0; i < snapshots.length; i++) {
       if (UI !== owner) return;
       toast(`저장 중… ${i + 1} / ${snapshots.length}장`, 0);
@@ -2910,9 +2996,20 @@ async function makeImages() {
       const blob = await H2I.toBlob(item.page, { pixelRatio: scale, fontEmbedCSS: css, cacheBust: false });
       if (UI !== owner) return;
       if (!blob) throw new Error("이미지 생성 결과가 비어 있어요.");
-      download(blob, `${prefix}_${item.index}.png`);
+      if (shareFiles) shareFiles.push(new File([blob], `${prefix}_${item.index}.png`, { type: "image/png" }));
+      else download(blob, `${prefix}_${item.index}.png`);
       item.page.remove();
-      if (i < snapshots.length - 1) await new Promise(r => marinara.setTimeout(r, 300));
+      if (!shareFiles && i < snapshots.length - 1) await new Promise(r => marinara.setTimeout(r, 300));
+    }
+    if (shareFiles) {
+      if (UI !== owner) return;
+      const how = await saveOnIOS(shareFiles);
+      if (how === "cancel") { toast("저장을 취소했어요."); return; }
+      if (how === "shared") { toast(`${shareFiles.length}장을 공유 시트로 보냈어요.${fontFailed ? " 일부 글꼴은 기본 글꼴로 저장됐어요." : ""}`, 4000); return; }
+      for (let i = 0; i < shareFiles.length; i++) {
+        download(shareFiles[i], shareFiles[i].name);
+        if (i < shareFiles.length - 1) await new Promise(r => marinara.setTimeout(r, 300));
+      }
     }
     toast(`${selected.length}장 저장을 요청했어요.${fontFailed ? " 일부 글꼴은 기본 글꼴로 저장됐어요." : ""}`, 4000);
   } catch (e) {
@@ -2925,6 +3022,34 @@ async function makeImages() {
   }
 }
 
+// 아이폰·아이패드 (아이패드는 맥처럼 보고해서 터치 지점 수로 가른다)
+function isIOS() {
+  const ua = navigator.userAgent || "";
+  return /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}
+// iOS는 <a download>로 여러 장을 받으면 막히거나 파일 앱으로만 가서,
+// 공유 시트를 띄워 '이미지 저장'으로 사진 앱에 바로 넣을 수 있게 한다.
+// 이미지 만드는 사이 터치 허용 시간이 지나 공유가 막히면, 버튼을 한 번 더 누르게 한다.
+async function saveOnIOS(files) {
+  if (!navigator.canShare?.({ files })) return "download";
+  const share = async () => {
+    try { await navigator.share({ files }); return "shared"; }
+    catch (e) { return e?.name === "AbortError" ? "cancel" : e?.name === "NotAllowedError" ? "retry" : "download"; }
+  };
+  const first = await share();
+  if (first !== "retry") return first;
+  return new Promise((resolve) => {
+    const done = (how) => { sheet.remove(); resolve(how); };
+    const sheet = h("div", { class: "mxc-share", onclick: (e) => { if (e.target === sheet) done("cancel"); } },
+      h("div", { class: "mxc-sharecard", role: "dialog", "aria-label": "이미지 저장" },
+        h("b", null, `이미지 ${files.length}장이 준비됐어요`),
+        h("p", null, "아래 버튼을 누르고 공유 시트에서 '이미지 저장'을 고르면 사진 앱에 들어가요."),
+        h("button", { type: "button", class: "mxc-btn primary", onclick: async () => done(await share()) }, "사진에 저장 / 공유"),
+        h("button", { type: "button", class: "mxc-btn", onclick: () => done("download") }, "파일로 받기"),
+        h("button", { type: "button", class: "mxc-btn", onclick: () => done("cancel") }, "닫기")));
+    document.body.append(sheet);
+  });
+}
 function download(blob, name) {
   const url = URL.createObjectURL(blob);
   const a = h("a", { href: url, download: name });
@@ -3272,6 +3397,25 @@ function openEditorNow(msgEl) {
   if (S.style.bgMode === "image" && S.style.bgKey) useBg(S.style.bgKey);
   renderTab();
   refreshModel();
+  useStoredTranslations([sec]).catch((e) => marinara.log.warn("번역문 불러오기 실패", e));
+  UI.offVV = followViewport(root);
+}
+
+// iOS는 키보드가 떠도 100dvh가 줄지 않아서, 보이는 영역(visualViewport)에 창을 맞춘다
+function followViewport(root) {
+  const vv = window.visualViewport;
+  if (!vv) return null;
+  const fit = () => {
+    const kb = vv.height < window.innerHeight * 0.8;
+    root.classList.add("mxc-vv");
+    root.classList.toggle("mxc-kb", kb);
+    root.style.setProperty("--mxc-vh", `${Math.round(vv.height)}px`);
+    root.style.setProperty("--mxc-vtop", `${Math.round(vv.offsetTop)}px`);
+  };
+  fit();
+  vv.addEventListener("resize", fit);
+  vv.addEventListener("scroll", fit);
+  return () => { vv.removeEventListener("resize", fit); vv.removeEventListener("scroll", fit); };
 }
 
 // ───────────────────────── 메시지 아래 버튼 ─────────────────────────
