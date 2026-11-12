@@ -1311,10 +1311,14 @@ function topMessages() {
 const SKIP = new Set(["IMG", "SVG", "STYLE", "SCRIPT", "BUTTON", "DETAILS", "VIDEO", "AUDIO", "IFRAME", "CANVAS",
   "INPUT", "TEXTAREA", "SELECT", "FIGURE", "PICTURE", "NOSCRIPT", "TEMPLATE", "OBJECT"]);
 const BLOCK = /^(P|DIV|H[1-6]|LI|BLOCKQUOTE|PRE|SECTION|ARTICLE|TR|UL|OL|TABLE|TBODY|THEAD|CENTER|HEADER|FOOTER|ASIDE|DL|DT|DD|MAIN|NAV)$/;
+// <speaker="이름">…</speaker> 태그 글자 (그룹 대화에서 마리나라가 붙이는 표시). 태그 사이를 나누는 데 쓴다.
+const SPEAKER_TAG_TEXT_RE = /(<\/?speaker\b[^<>]*>)/i;
 
 function toParas(root) {
   const out = [];
   let cur = null;
+  // <speaker> 태그 안이면 따옴표가 없어도 대사다. 태그를 만날 때마다 켜고 끈다(문단을 넘어서도 이어짐).
+  let inSpeaker = false;
   const flush = () => { if (cur && cur.textContent.trim()) out.push(cur); cur = null; };
   const ensure = () => (cur ||= document.createElement("p"));
   const addText = (txt, m) => {
@@ -1322,19 +1326,23 @@ function toParas(root) {
     let node = document.createTextNode(txt);
     if (m.i) { const e = document.createElement("em"); e.append(node); node = e; }
     if (m.b) { const s = document.createElement("strong"); s.append(node); node = s; }
+    if (m.s) { const q = document.createElement("span"); q.className = "mxq"; q.append(node); node = q; }
     ensure().append(node);
   };
   const walk = (node, m) => {
     for (const n of node.childNodes) {
       if (n.nodeType === 3) {
-        const parts = n.nodeValue.split(/(\n+)/);
-        for (const part of parts) {
-          if (!part) continue;
-          if (part[0] === "\n") {
-            if (part.length >= 2) flush();
-            else if (cur) cur.append(document.createElement("br"));
-          } else addText(part, m);
-        }
+        // 글자 안의 <speaker> 태그를 만나면 대사 구간을 여닫고, 태그 글자는 발췌에 넣지 않는다
+        n.nodeValue.split(SPEAKER_TAG_TEXT_RE).forEach((piece, idx) => {
+          if (idx % 2 === 1) { inSpeaker = !piece.startsWith("</"); return; }
+          for (const part of piece.split(/(\n+)/)) {
+            if (!part) continue;
+            if (part[0] === "\n") {
+              if (part.length >= 2) flush();
+              else if (cur) cur.append(document.createElement("br"));
+            } else addText(part, { ...m, s: m.s || inSpeaker });
+          }
+        });
         continue;
       }
       if (n.nodeType !== 1) continue;
@@ -1342,11 +1350,16 @@ function toParas(root) {
       if (SKIP.has(tag) || n.hidden || n.getAttribute("aria-hidden") === "true") continue;
       if (tag === "BR") { if (cur) cur.append(document.createElement("br")); continue; }
       if (tag === "HR") { flush(); out.push(document.createElement("hr")); continue; }
-      const next = { i: m.i || tag === "EM" || tag === "I", b: m.b || tag === "STRONG" || tag === "B" };
+      // 대사 색을 입힌 칸(data-spk)이나 <speaker> 요소 안도 대사로 본다
+      const next = {
+        i: m.i || tag === "EM" || tag === "I",
+        b: m.b || tag === "STRONG" || tag === "B",
+        s: m.s || tag === "SPEAKER" || n.hasAttribute("data-spk"),
+      };
       if (BLOCK.test(tag)) { flush(); walk(n, next); flush(); } else walk(n, next);
     }
   };
-  walk(root, { i: false, b: false });
+  walk(root, { i: false, b: false, s: false });
   flush();
   for (const p of out) {
     if (p.tagName !== "P") continue;
@@ -1453,7 +1466,9 @@ function storedTranslation(row) {
 }
 // 번역문은 마크다운 글이라 **굵게**, *기울임* 만 살려서 문단으로 바꾼다
 function textToParas(text) {
-  const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // 번역문에 <speaker> 태그가 &lt;…&gt; 로 적혀 있으면 원래 태그로 되돌린다
+  const fixed = text.replace(/&lt;(\/?speaker\b.*?)&gt;/gi, (_, inner) => `<${inner.replace(/&quot;/g, '"')}>`);
+  const esc = fixed.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const div = document.createElement("div");
   div.innerHTML = esc
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
